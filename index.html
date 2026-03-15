@@ -51,7 +51,7 @@
                 </button>
             </div>
             <div class="flex justify-center mt-3">
-                <p class="text-sm text-slate-600 font-mono" id="time-display">00:00 / 00:00</p>
+                <p class="text-sm text-slate-600 font-mono" id="time-display">00:00:00 / 00:00:00</p>
             </div>
         </div>
 
@@ -65,43 +65,42 @@
     </div>
 
     <script>
-        const uploadInput = document.getElementById('pdf-upload');
-        const fileNameDisplay = document.getElementById('file-name');
-        const statusBox = document.getElementById('status-box');
-        const playBtn = document.getElementById('play-btn');
-        const pauseBtn = document.getElementById('pause-btn');
-        const stopBtn = document.getElementById('stop-btn');
-        const rewind30Btn = document.getElementById('rewind-30-btn');
-        const rewind10Btn = document.getElementById('rewind-10-btn');
-        const forward10Btn = document.getElementById('forward-10-btn');
-        const forward30Btn = document.getElementById('forward-30-btn');
-        const timeDisplay = document.getElementById('time-display');
+        const uploadInput = document.getElementById("pdf-upload");
+        const fileNameDisplay = document.getElementById("file-name");
+        const statusBox = document.getElementById("status-box");
+        const playBtn = document.getElementById("play-btn");
+        const pauseBtn = document.getElementById("pause-btn");
+        const stopBtn = document.getElementById("stop-btn");
+        const rewind30Btn = document.getElementById("rewind-30-btn");
+        const rewind10Btn = document.getElementById("rewind-10-btn");
+        const forward10Btn = document.getElementById("forward-10-btn");
+        const forward30Btn = document.getElementById("forward-30-btn");
+        const timeDisplay = document.getElementById("time-display");
 
         let fullText = "";
         let synth = window.speechSynthesis;
         let utterance = null;
-        
+
         // Time tracking variables
-        let startTime = 0;
         let currentCharIndex = 0; // Absolute position in full text
         let elapsedSeconds = 0;
         let isPlaying = false;
         let isPaused = false;
         let updateInterval = null;
         let estimatedTotalSeconds = 0;
+        let charsPerSecond = getCharsPerSecond(1.0);
+        let lastUpdateTime = 0;
 
-        // Initialize the local PDF worker
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
 
-        // Helper function: Format seconds to MM:SS
-        function formatTime(seconds) {
-            const mins = Math.floor(seconds / 60);
-            const secs = Math.floor(seconds % 60);
-            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        function formatDuration(seconds) {
+            const totalSeconds = Math.max(0, Math.floor(seconds));
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const secs = totalSeconds % 60;
+            return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
         }
 
-        // Helper function: Calculate characters per second based on speech rate
-        // Baseline: ~150 words per minute at 1.0 rate, ~5 chars per word average
         function getCharsPerSecond(utteranceRate = 1.0) {
             const WPM = 150;
             const CHARS_PER_WORD = 5;
@@ -109,48 +108,62 @@
             return charsPerMinute / 60;
         }
 
-        // Helper function: Estimate total duration in seconds
         function estimateTotalDuration() {
-            const charsPerSecond = getCharsPerSecond(1.0); // Use default rate for estimation
-            return fullText.length / charsPerSecond;
+            const rate = getCharsPerSecond(1.0);
+            if (!rate) {
+                return 0;
+            }
+            return fullText.length / rate;
         }
 
-        // Helper function: Seek to a new position by skipping/rewinding
+        function updatePlaybackProgress() {
+            if (!isPlaying || isPaused) {
+                return;
+            }
+            const now = Date.now();
+            if (!lastUpdateTime) {
+                lastUpdateTime = now;
+                return;
+            }
+            const deltaSeconds = (now - lastUpdateTime) / 1000;
+            if (deltaSeconds > 0) {
+                currentCharIndex = Math.min(fullText.length, currentCharIndex + deltaSeconds * charsPerSecond);
+                elapsedSeconds = charsPerSecond ? currentCharIndex / charsPerSecond : 0;
+            }
+            lastUpdateTime = now;
+        }
+
         function seekBySeconds(skipSeconds) {
             if (!isPlaying && !isPaused) return;
 
-            // Pause current utterance
             synth.pause();
 
-            // Calculate new character index
-            const charsPerSecond = getCharsPerSecond(utterance?.rate || 1.0);
-            let newIndex = currentCharIndex + (skipSeconds * charsPerSecond);
-            
-            // Clamp to valid range
-            newIndex = Math.max(0, Math.min(newIndex, fullText.length - 1));
+            const seekRate = utterance?.rate || 1.0;
+            const rateChars = getCharsPerSecond(seekRate);
+            let newIndex = currentCharIndex + (skipSeconds * rateChars);
+            newIndex = Math.max(0, Math.min(newIndex, fullText.length));
 
-            // Cancel current utterance and create new one from new position
             synth.cancel();
             currentCharIndex = newIndex;
-            
+            charsPerSecond = rateChars;
+            lastUpdateTime = Date.now();
+
             const remainingText = fullText.substring(newIndex);
             utterance = new SpeechSynthesisUtterance(remainingText);
-            utterance.rate = 1.0;
-            
-            // Reattach event listeners
+            utterance.rate = seekRate;
+
             attachUtteranceListeners();
-            
             synth.speak(utterance);
             isPaused = false;
             updateTimeDisplay();
         }
 
-        // Helper function: Attach event listeners to utterance
         function attachUtteranceListeners() {
             utterance.onstart = () => {
                 isPlaying = true;
                 isPaused = false;
-                startTime = Date.now();
+                charsPerSecond = getCharsPerSecond(utterance.rate || 1.0);
+                lastUpdateTime = Date.now();
                 if (!updateInterval) {
                     updateInterval = setInterval(updateTimeDisplay, 100);
                 }
@@ -161,6 +174,9 @@
             utterance.onend = () => {
                 isPlaying = false;
                 isPaused = false;
+                currentCharIndex = fullText.length;
+                elapsedSeconds = estimateTotalDuration();
+                lastUpdateTime = 0;
                 if (updateInterval) {
                     clearInterval(updateInterval);
                     updateInterval = null;
@@ -168,10 +184,13 @@
                 pauseBtn.disabled = true;
                 updateSkipButtonStates();
                 statusBox.textContent = "Finished reading!";
+                updateTimeDisplay();
             };
 
             utterance.onpause = () => {
+                updatePlaybackProgress();
                 isPaused = true;
+                lastUpdateTime = 0;
                 if (updateInterval) {
                     clearInterval(updateInterval);
                     updateInterval = null;
@@ -181,7 +200,7 @@
 
             utterance.onresume = () => {
                 isPaused = false;
-                startTime = Date.now() - (elapsedSeconds * 1000);
+                lastUpdateTime = Date.now();
                 if (!updateInterval) {
                     updateInterval = setInterval(updateTimeDisplay, 100);
                 }
@@ -189,16 +208,14 @@
             };
         }
 
-        // Helper function: Update time display
         function updateTimeDisplay() {
-            if (isPlaying && !isPaused) {
-                elapsedSeconds = (Date.now() - startTime) / 1000;
-            }
+            updatePlaybackProgress();
             const totalSeconds = estimateTotalDuration();
-            timeDisplay.textContent = `${formatTime(elapsedSeconds)} / ${formatTime(totalSeconds)}`;
+            const displayElapsed = charsPerSecond ? currentCharIndex / charsPerSecond : 0;
+            elapsedSeconds = displayElapsed;
+            timeDisplay.textContent = `${formatDuration(displayElapsed)} / ${formatDuration(totalSeconds)}`;
         }
 
-        // Helper function: Update skip button states
         function updateSkipButtonStates() {
             const canSkip = isPlaying || isPaused;
             rewind30Btn.disabled = !canSkip;
@@ -207,8 +224,7 @@
             forward30Btn.disabled = !canSkip;
         }
 
-        // 1. Handle PDF Upload & Extract Text Locally
-        uploadInput.addEventListener('change', async (e) => {
+        uploadInput.addEventListener("change", async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
@@ -217,19 +233,16 @@
             playBtn.disabled = true;
 
             try {
-                // Read file into laptop memory
                 const arrayBuffer = await file.arrayBuffer();
                 const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
                 fullText = "";
 
-                // Loop through pages and extract text
                 for (let i = 1; i <= pdf.numPages; i++) {
                     const page = await pdf.getPage(i);
                     const textContent = await page.getTextContent();
                     const pageText = textContent.items.map(item => item.str).join(" ");
                     fullText += pageText + " \n";
-                    
-                    // Update UI every 10 pages so the browser doesn't freeze
+
                     if (i % 10 === 0) {
                         statusBox.textContent = `Extracting: Page ${i} of ${pdf.numPages}...`;
                     }
@@ -237,29 +250,32 @@
 
                 estimatedTotalSeconds = estimateTotalDuration();
                 statusBox.textContent = "Extraction complete! Ready to read.\n\nPreview:\n" + fullText.substring(0, 300) + "...";
-                timeDisplay.textContent = `00:00 / ${formatTime(estimatedTotalSeconds)}`;
+                timeDisplay.textContent = `00:00:00 / ${formatDuration(estimatedTotalSeconds)}`;
                 playBtn.disabled = false;
                 stopBtn.disabled = false;
-
+                currentCharIndex = 0;
+                elapsedSeconds = 0;
+                charsPerSecond = getCharsPerSecond(1.0);
+                lastUpdateTime = 0;
+                updateSkipButtonStates();
             } catch (error) {
                 statusBox.textContent = "Error reading PDF: " + error.message;
             }
         });
 
-        // 2. Play Audio using Browser's built-in offline voices
-        playBtn.addEventListener('click', () => {
+        playBtn.addEventListener("click", () => {
             if (synth.paused) {
                 synth.resume();
                 statusBox.textContent = "Reading resumed...";
+                return;
             } else if (!isPlaying) {
-                synth.cancel(); // Stop any previous speech
+                synth.cancel();
                 currentCharIndex = 0;
                 elapsedSeconds = 0;
+                charsPerSecond = getCharsPerSecond(1.0);
                 utterance = new SpeechSynthesisUtterance(fullText);
-                
-                // You can change the speed here (1.0 is normal, 1.5 is fast)
-                utterance.rate = 1.0; 
-                
+                utterance.rate = 1.0;
+
                 attachUtteranceListeners();
                 synth.speak(utterance);
                 statusBox.textContent = "Reading out loud...";
@@ -267,54 +283,52 @@
             pauseBtn.disabled = false;
         });
 
-        // 3. Pause Audio
-        pauseBtn.addEventListener('click', () => {
+        pauseBtn.addEventListener("click", () => {
             if (synth.speaking && !synth.paused) {
+                updatePlaybackProgress();
                 synth.pause();
-                statusBox.textContent = `Reading paused. (${formatTime(elapsedSeconds)})`;
+                statusBox.textContent = `Reading paused. (${formatDuration(elapsedSeconds)})`;
             }
         });
 
-        // 4. Stop Audio
-        stopBtn.addEventListener('click', () => {
+        stopBtn.addEventListener("click", () => {
             synth.cancel();
             isPlaying = false;
             isPaused = false;
             currentCharIndex = 0;
             elapsedSeconds = 0;
+            charsPerSecond = getCharsPerSecond(1.0);
+            lastUpdateTime = 0;
             if (updateInterval) {
                 clearInterval(updateInterval);
                 updateInterval = null;
             }
             statusBox.textContent = "Reading stopped.";
-            timeDisplay.textContent = `00:00 / ${formatTime(estimatedTotalSeconds)}`;
+            timeDisplay.textContent = `00:00:00 / ${formatDuration(estimatedTotalSeconds)}`;
             pauseBtn.disabled = true;
             updateSkipButtonStates();
         });
 
-        // 5. Skip Forward 10 seconds
-        forward10Btn.addEventListener('click', () => {
+        forward10Btn.addEventListener("click", () => {
             seekBySeconds(10);
             statusBox.textContent = "Skipped forward 10 seconds...";
         });
 
-        // 6. Skip Forward 30 seconds
-        forward30Btn.addEventListener('click', () => {
+        forward30Btn.addEventListener("click", () => {
             seekBySeconds(30);
             statusBox.textContent = "Skipped forward 30 seconds...";
         });
 
-        // 7. Rewind 10 seconds
-        rewind10Btn.addEventListener('click', () => {
+        rewind10Btn.addEventListener("click", () => {
             seekBySeconds(-10);
             statusBox.textContent = "Rewound 10 seconds...";
         });
 
-        // 8. Rewind 30 seconds
-        rewind30Btn.addEventListener('click', () => {
+        rewind30Btn.addEventListener("click", () => {
             seekBySeconds(-30);
             statusBox.textContent = "Rewound 30 seconds...";
         });
     </script>
 </body>
 </html>
+
