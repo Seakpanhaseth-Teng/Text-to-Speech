@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimalist Local Narrator</title>
+    <!-- Tailwind CSS for a clean, minimalist UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF.js for reading PDFs locally without a server -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans flex items-center justify-center min-h-screen p-4">
+
+    <div class="bg-white p-8 rounded-2xl shadow-sm border border-slate-100 max-w-lg w-full">
+        <h1 class="text-3xl font-bold mb-1 text-center text-slate-800">Local Narrator</h1>
+        <p class="text-sm text-slate-500 mb-8 text-center">100% Local. No cloud. No servers.</p>
+
+        <!-- Homepage Upload Section -->
+        <div class="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 transition">
+            <input type="file" id="pdf-upload" accept="application/pdf" class="hidden">
+            <label for="pdf-upload" class="cursor-pointer text-blue-600 font-semibold text-lg block mb-1">
+                Click to upload a PDF book
+            </label>
+            <p class="text-xs text-slate-400 mt-2" id="file-name">Your file never leaves this device.</p>
+        </div>
+
+        <!-- Audio Controls -->
+        <div class="mt-8 flex justify-center space-x-3">
+            <button id="play-btn" class="bg-blue-600 text-white px-6 py-2 rounded-full font-medium hover:bg-blue-700 transition disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                ▶ Play
+            </button>
+            <button id="pause-btn" class="bg-slate-100 text-slate-800 px-6 py-2 rounded-full font-medium hover:bg-slate-200 transition disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                ⏸ Pause
+            </button>
+            <button id="stop-btn" class="bg-red-50 text-red-600 px-6 py-2 rounded-full font-medium hover:bg-red-100 transition disabled:opacity-40 disabled:cursor-not-allowed" disabled>
+                ⏹ Stop
+            </button>
+        </div>
+
+        <!-- Text Preview & Status -->
+        <div class="mt-8">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Status & Preview</p>
+            <div class="text-sm text-slate-600 bg-slate-50 p-4 rounded-xl h-40 overflow-y-auto border border-slate-100" id="status-box">
+                Waiting for a book...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const uploadInput = document.getElementById('pdf-upload');
+        const fileNameDisplay = document.getElementById('file-name');
+        const statusBox = document.getElementById('status-box');
+        const playBtn = document.getElementById('play-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+        const stopBtn = document.getElementById('stop-btn');
+
+        let fullText = "";
+        let synth = window.speechSynthesis;
+        let utterance = null;
+
+        // Initialize the local PDF worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+        // 1. Handle PDF Upload & Extract Text Locally
+        uploadInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            fileNameDisplay.textContent = file.name;
+            statusBox.textContent = "Extracting text from PDF... (this might take a moment depending on the book length)";
+            playBtn.disabled = true;
+
+            try {
+                // Read file into laptop memory
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                fullText = "";
+
+                // Loop through pages and extract text
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const page = await pdf.getPage(i);
+                    const textContent = await page.getTextContent();
+                    const pageText = textContent.items.map(item => item.str).join(" ");
+                    fullText += pageText + " \n";
+                    
+                    // Update UI every 10 pages so the browser doesn't freeze
+                    if (i % 10 === 0) {
+                        statusBox.textContent = `Extracting: Page ${i} of ${pdf.numPages}...`;
+                    }
+                }
+
+                statusBox.textContent = "Extraction complete! Ready to read.\n\nPreview:\n" + fullText.substring(0, 300) + "...";
+                playBtn.disabled = false;
+                stopBtn.disabled = false;
+
+            } catch (error) {
+                statusBox.textContent = "Error reading PDF: " + error.message;
+            }
+        });
+
+        // 2. Play Audio using Browser's built-in offline voices
+        playBtn.addEventListener('click', () => {
+            if (synth.paused) {
+                synth.resume();
+                statusBox.textContent = "Reading resumed...";
+            } else {
+                synth.cancel(); // Stop any previous speech
+                utterance = new SpeechSynthesisUtterance(fullText);
+                
+                // You can change the speed here (1.0 is normal, 1.5 is fast)
+                utterance.rate = 1.0; 
+                
+                synth.speak(utterance);
+                statusBox.textContent = "Reading out loud...";
+            }
+            pauseBtn.disabled = false;
+        });
+
+        // 3. Pause Audio
+        pauseBtn.addEventListener('click', () => {
+            if (synth.speaking && !synth.paused) {
+                synth.pause();
+                statusBox.textContent = "Reading paused.";
+            }
+        });
+
+        // 4. Stop Audio
+        stopBtn.addEventListener('click', () => {
+            synth.cancel();
+            statusBox.textContent = "Reading stopped.";
+            pauseBtn.disabled = true;
+        });
+    </script>
+</body>
+</html>
